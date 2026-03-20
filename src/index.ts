@@ -77,6 +77,9 @@ async function handlePlay(interaction: ChatInputCommandInteraction, player: Play
   try {
     const { track, queue } = await player.play(channel, query, {
       requestedBy: interaction.user,
+      connectionOptions: {
+        daveEncryption: false
+      },
       nodeOptions: {
         metadata: {
           channel: replyChannel
