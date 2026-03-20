@@ -7,10 +7,14 @@ import type { MusicMetadata } from './types.js';
 
 export async function createMusicPlayer(client: Client): Promise<Player> {
   const player = new Player(client, {
-    ffmpegPath: config.FFMPEG_PATH
+    ffmpegPath: config.FFMPEG_PATH,
+    connectionTimeout: 30_000
   });
 
-  await player.extractors.register(YoutubeiExtractor, {});
+  await player.extractors.register(YoutubeiExtractor, {
+    useYoutubeDL: true,
+    logLevel: 'LOW'
+  });
 
   player.events.on('playerStart', async (queue, track) => {
     await queue.metadata?.channel.send(

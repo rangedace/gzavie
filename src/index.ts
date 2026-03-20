@@ -85,12 +85,13 @@ async function handlePlay(interaction: ChatInputCommandInteraction, player: Play
           channel: replyChannel
         } satisfies MusicMetadata,
         selfDeaf: true,
+        connectionTimeout: 30_000,
         leaveOnEmpty: true,
         leaveOnEmptyCooldown: 60_000,
         leaveOnEnd: true,
         leaveOnEndCooldown: 30_000,
         leaveOnStop: true,
-        bufferingTimeout: 15_000
+        bufferingTimeout: 30_000
       }
     });
 
