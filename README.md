@@ -51,19 +51,21 @@ npm start
 
 ## Docker
 
-Build:
+Image publiée par la CI GitLab:
 
 ```bash
-docker build -t gzavie-bot .
+registry.gitlab.com/olivieridamien89/gzavie/gzavie-discord-music-bot:latest
 ```
 
 Déploiement Portainer:
 
 ```bash
-docker compose up --build -d
+docker compose pull
+docker compose up -d
 ```
 
 Le fichier `docker-compose.yml` peut servir de base à une stack Portainer.
+Déclare `DISCORD_TOKEN` et `DISCORD_CLIENT_ID` dans l’UI Portainer ou dans l’environnement de la stack.
 
 ## GitLab CI
 

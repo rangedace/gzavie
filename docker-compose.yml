@@ -1,8 +1,9 @@
 services:
   bot:
-    build:
-      context: .
-    image: gzavie-discord-music-bot:local
-    env_file:
-      - .env
+    image: registry.gitlab.com/olivieridamien89/gzavie/gzavie-discord-music-bot:latest
+    container_name: gzavie-bot
     restart: unless-stopped
+    pull_policy: always
+    environment:
+      DISCORD_TOKEN: "${DISCORD_TOKEN}"
+      DISCORD_CLIENT_ID: "${DISCORD_CLIENT_ID}"
