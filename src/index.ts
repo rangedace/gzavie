@@ -162,6 +162,7 @@ async function bootstrap(): Promise<void> {
   });
 
   const player = await createMusicPlayer(client);
+  console.log(player.scanDeps());
 
   client.once(Events.ClientReady, (readyClient) => {
     console.log(`Bot connected as ${readyClient.user.tag}`);

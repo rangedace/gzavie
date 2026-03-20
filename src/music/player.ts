@@ -22,6 +22,35 @@ export async function createMusicPlayer(client: Client): Promise<Player> {
     );
   });
 
+  player.events.on('debug', (queue, message) => {
+    console.log(`[queue:${queue.guild.id}] ${message}`);
+  });
+
+  player.events.on('connection', (queue) => {
+    const dispatcher = queue.dispatcher;
+    if (!dispatcher) {
+      return;
+    }
+
+    dispatcher.on('debug', (message) => {
+      console.log(`[dispatcher:${queue.guild.id}] ${message}`);
+    });
+
+    dispatcher.voiceConnection.on('debug', (message) => {
+      console.log(`[voice:${queue.guild.id}] ${message}`);
+    });
+
+    dispatcher.voiceConnection.on('stateChange', (oldState, newState) => {
+      console.log(
+        `[voice:${queue.guild.id}] state ${oldState.status} -> ${newState.status}`
+      );
+    });
+
+    dispatcher.voiceConnection.on('error', (error) => {
+      console.error(`[voice:${queue.guild.id}] error`, error);
+    });
+  });
+
   player.events.on('audioTrackAdd', async (queue, track) => {
     if (queue.isPlaying()) {
       await queue.metadata?.channel.send(`Ajouté à la file: **${track.cleanTitle}**`);
