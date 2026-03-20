@@ -1,0 +1,8 @@
+services:
+  bot:
+    build:
+      context: .
+    image: gzavie-discord-music-bot:local
+    env_file:
+      - .env
+    restart: unless-stopped
