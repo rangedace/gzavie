@@ -66,6 +66,7 @@ docker compose up -d
 
 Le fichier `docker-compose.yml` peut servir de base à une stack Portainer.
 Déclare `DISCORD_TOKEN` et `DISCORD_CLIENT_ID` dans l’UI Portainer ou dans l’environnement de la stack.
+Le compose utilise `network_mode: host` pour éviter les soucis de session voice/UDP avec Discord dans Docker sur Linux.
 
 ## GitLab CI
 
