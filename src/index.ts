@@ -78,14 +78,15 @@ async function handlePlay(interaction: ChatInputCommandInteraction, player: Play
     const { track, queue } = await player.play(channel, query, {
       requestedBy: interaction.user,
       connectionOptions: {
-        daveEncryption: false
+        daveEncryption: false,
+        timeout: 120_000
       },
       nodeOptions: {
         metadata: {
           channel: replyChannel
         } satisfies MusicMetadata,
         selfDeaf: true,
-        connectionTimeout: 30_000,
+        connectionTimeout: 120_000,
         leaveOnEmpty: true,
         leaveOnEmptyCooldown: 60_000,
         leaveOnEnd: true,
