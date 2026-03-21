@@ -89,42 +89,29 @@ async function resolveTracks(query: string, requestedById: string): Promise<Queu
   return tracks;
 }
 
-async function resolveStreamUrl(track: QueuedTrack): Promise<string> {
-  const output = await youtubedl(track.url, {
-    format: SEARCH_FORMAT,
-    getUrl: true,
-    noCheckCertificates: true,
-    noWarnings: true,
-    skipDownload: true
-  });
+function createPlaybackProcesses(track: QueuedTrack) {
+  const ytDlp = youtubedl.exec(
+    track.url,
+    {
+      format: SEARCH_FORMAT,
+      noCheckCertificates: true,
+      noWarnings: true,
+      output: '-',
+      quiet: true
+    },
+    {
+      stdio: ['ignore', 'pipe', 'pipe']
+    }
+  );
 
-  const firstUrl = String(output)
-    .split('\n')
-    .map((line) => line.trim())
-    .find(Boolean);
-
-  if (!firstUrl) {
-    throw new Error(`Unable to resolve stream URL for ${track.title}.`);
-  }
-
-  return firstUrl;
-}
-
-function createFfmpegProcess(streamUrl: string) {
-  return spawn(
+  const ffmpeg = spawn(
     config.FFMPEG_PATH ?? 'ffmpeg',
     [
       '-hide_banner',
       '-loglevel',
       'error',
-      '-reconnect',
-      '1',
-      '-reconnect_streamed',
-      '1',
-      '-reconnect_delay_max',
-      '5',
       '-i',
-      streamUrl,
+      'pipe:0',
       '-analyzeduration',
       '0',
       '-f',
@@ -136,9 +123,20 @@ function createFfmpegProcess(streamUrl: string) {
       'pipe:1'
     ],
     {
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe']
     }
   );
+
+  if (!ytDlp.stdout || !ytDlp.stderr || !ffmpeg.stdin) {
+    throw new Error('Failed to initialize playback subprocess pipes.');
+  }
+
+  ytDlp.stdout.pipe(ffmpeg.stdin);
+
+  return {
+    ffmpeg,
+    ytDlp
+  };
 }
 
 export class MusicPlayer {
@@ -161,17 +159,13 @@ export class MusicPlayer {
     session.textChannel = context.textChannel;
     session.queue.push(...tracks);
 
-    if (session.audioPlayer.state.status === AudioPlayerStatus.Idle && !session.currentTrack) {
-      await this.playNext(session);
-    }
-
     if (!session.currentTrack) {
-      throw new Error('Unable to start playback.');
+      await this.playNext(session);
     }
 
     return {
       added: tracks,
-      current: session.currentTrack
+      current: session.currentTrack ?? tracks[0]!
     };
   }
 
@@ -242,7 +236,7 @@ export class MusicPlayer {
     const session: GuildPlaybackSession = {
       audioPlayer,
       connection,
-      currentProcess: null,
+      currentProcesses: [],
       currentTrack: null,
       guildId: guild.id,
       queue: [],
@@ -298,14 +292,30 @@ export class MusicPlayer {
     }
 
     try {
-      const streamUrl = await resolveStreamUrl(nextTrack);
-      const ffmpeg = createFfmpegProcess(streamUrl);
-      session.currentProcess = ffmpeg;
+      const { ffmpeg, ytDlp } = createPlaybackProcesses(nextTrack);
+      session.currentProcesses = [ytDlp, ffmpeg];
+
+      if (!ytDlp.stderr) {
+        throw new Error('yt-dlp stderr pipe is unavailable.');
+      }
+
+      ytDlp.stderr.on('data', (chunk) => {
+        const message = chunk.toString().trim();
+        if (message) {
+          console.error(`[yt-dlp:${session.guildId}] ${message}`);
+        }
+      });
 
       ffmpeg.stderr.on('data', (chunk) => {
         const message = chunk.toString().trim();
         if (message) {
           console.error(`[ffmpeg:${session.guildId}] ${message}`);
+        }
+      });
+
+      ytDlp.once('close', (code) => {
+        if (code !== 0 && code !== null) {
+          console.error(`[yt-dlp:${session.guildId}] exited with code ${code}`);
         }
       });
 
@@ -336,10 +346,12 @@ export class MusicPlayer {
   }
 
   private stopCurrentProcess(session: GuildPlaybackSession): void {
-    if (session.currentProcess && !session.currentProcess.killed) {
-      session.currentProcess.kill('SIGKILL');
+    for (const process of session.currentProcesses) {
+      if (!process.killed) {
+        process.kill('SIGKILL');
+      }
     }
-    session.currentProcess = null;
+    session.currentProcesses = [];
   }
 
   private destroySession(session: GuildPlaybackSession): void {

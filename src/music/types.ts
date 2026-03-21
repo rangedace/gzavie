@@ -18,7 +18,7 @@ export interface QueuedTrack {
 export interface GuildPlaybackSession {
   audioPlayer: AudioPlayer;
   connection: VoiceConnection;
-  currentProcess: ChildProcess | null;
+  currentProcesses: ChildProcess[];
   currentTrack: QueuedTrack | null;
   guildId: Snowflake;
   queue: QueuedTrack[];
