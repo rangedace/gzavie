@@ -8,11 +8,10 @@ import {
   type ChatInputCommandInteraction,
   type VoiceBasedChannel
 } from 'discord.js';
-import type { Player } from 'discord-player';
 
 import { config } from './config.js';
 import { registerSlashCommands } from './discord/registerCommands.js';
-import { createMusicPlayer, getQueueSummary, type MusicMetadata } from './music/player.js';
+import { MusicPlayer } from './music/player.js';
 
 function getMemberVoiceChannel(interaction: ChatInputCommandInteraction): VoiceBasedChannel | null {
   if (!(interaction.member instanceof GuildMember)) {
@@ -28,8 +27,8 @@ function isSupportedVoiceChannel(channel: VoiceBasedChannel | null): channel is 
 
 async function ensureQueueAccess(
   interaction: ChatInputCommandInteraction,
-  player: Player
-): Promise<{ queue: ReturnType<Player['nodes']['get']>; channel: VoiceBasedChannel } | null> {
+  _musicPlayer: MusicPlayer
+): Promise<{ channel: VoiceBasedChannel } | null> {
   const channel = getMemberVoiceChannel(interaction);
 
   if (!isSupportedVoiceChannel(channel)) {
@@ -40,31 +39,20 @@ async function ensureQueueAccess(
     return null;
   }
 
-  const queue = player.nodes.get(interaction.guildId!);
-
-  if (queue?.channel && queue.channel.id !== channel.id) {
-    await interaction.reply({
-      content: `Le bot est déjà actif dans **${queue.channel.name}**.`,
-      flags: MessageFlags.Ephemeral
-    });
-    return null;
-  }
-
-  return { queue, channel };
+  return { channel };
 }
 
-async function handlePlay(interaction: ChatInputCommandInteraction, player: Player): Promise<void> {
-  const access = await ensureQueueAccess(interaction, player);
+async function handlePlay(interaction: ChatInputCommandInteraction, musicPlayer: MusicPlayer): Promise<void> {
+  const access = await ensureQueueAccess(interaction, musicPlayer);
 
   if (!access) {
     return;
   }
 
-  const { channel } = access;
   const query = interaction.options.getString('query', true);
   const replyChannel = interaction.channel;
 
-  if (!replyChannel) {
+  if (!replyChannel || !('send' in replyChannel)) {
     await interaction.reply({
       content: 'Impossible de récupérer le salon texte pour répondre.',
       flags: MessageFlags.Ephemeral
@@ -75,34 +63,29 @@ async function handlePlay(interaction: ChatInputCommandInteraction, player: Play
   await interaction.deferReply();
 
   try {
-    const { track, queue } = await player.play(channel, query, {
-      requestedBy: interaction.user,
-      connectionOptions: {
-        daveEncryption: false,
-        timeout: 120_000
-      },
-      nodeOptions: {
-        metadata: {
-          channel: replyChannel
-        } satisfies MusicMetadata,
-        selfDeaf: true,
-        connectionTimeout: 120_000,
-        pauseOnEmpty: false,
-        leaveOnEmpty: false,
-        leaveOnEmptyCooldown: 60_000,
-        leaveOnEnd: true,
-        leaveOnEndCooldown: 30_000,
-        leaveOnStop: true,
-        bufferingTimeout: 30_000
-      }
+    if (!(interaction.member instanceof GuildMember)) {
+      throw new Error('Membre introuvable dans le serveur.');
+    }
+
+    const { added } = await musicPlayer.enqueue({
+      member: interaction.member,
+      query,
+      textChannel: replyChannel
     });
 
-    queue.setMetadata({
-      channel: replyChannel
-    } satisfies MusicMetadata);
+    if (added.length === 1) {
+      const track = added[0];
+      if (!track) {
+        throw new Error('Aucun titre résolu.');
+      }
+      await interaction.followUp(
+        `Ajouté: **${track.title}** (${musicPlayer.getQueueSummary(interaction.guildId!)})`
+      );
+      return;
+    }
 
     await interaction.followUp(
-      `Ajouté: **${track.cleanTitle}** (${getQueueSummary(queue)})`
+      `Ajouté ${added.length} titres (${musicPlayer.getQueueSummary(interaction.guildId!)})`
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'erreur inconnue';
@@ -110,16 +93,16 @@ async function handlePlay(interaction: ChatInputCommandInteraction, player: Play
   }
 }
 
-async function handleSkip(interaction: ChatInputCommandInteraction, player: Player): Promise<void> {
-  const access = await ensureQueueAccess(interaction, player);
+async function handleSkip(interaction: ChatInputCommandInteraction, musicPlayer: MusicPlayer): Promise<void> {
+  const access = await ensureQueueAccess(interaction, musicPlayer);
 
   if (!access) {
     return;
   }
 
-  const { queue } = access;
+  const skipped = musicPlayer.skip(interaction.guildId!);
 
-  if (!queue || !queue.currentTrack) {
+  if (!skipped) {
     await interaction.reply({
       content: 'Aucune musique en cours.',
       flags: MessageFlags.Ephemeral
@@ -127,20 +110,17 @@ async function handleSkip(interaction: ChatInputCommandInteraction, player: Play
     return;
   }
 
-  queue.node.skip();
-  await interaction.reply(`Titre passé. ${getQueueSummary(queue)}`);
+  await interaction.reply(`Titre passé. ${musicPlayer.getQueueSummary(interaction.guildId!)}`);
 }
 
-async function handleStop(interaction: ChatInputCommandInteraction, player: Player): Promise<void> {
-  const access = await ensureQueueAccess(interaction, player);
+async function handleStop(interaction: ChatInputCommandInteraction, musicPlayer: MusicPlayer): Promise<void> {
+  const access = await ensureQueueAccess(interaction, musicPlayer);
 
   if (!access) {
     return;
   }
 
-  const { queue } = access;
-
-  if (!queue) {
+  if (!musicPlayer.stop(interaction.guildId!)) {
     await interaction.reply({
       content: 'Aucune file active.',
       flags: MessageFlags.Ephemeral
@@ -148,7 +128,6 @@ async function handleStop(interaction: ChatInputCommandInteraction, player: Play
     return;
   }
 
-  queue.delete();
   await interaction.reply('Lecture arrêtée, file vidée et vocal quitté.');
 }
 
@@ -162,8 +141,7 @@ async function bootstrap(): Promise<void> {
     ]
   });
 
-  const player = await createMusicPlayer(client);
-  console.log(player.scanDeps());
+  const musicPlayer = new MusicPlayer();
 
   client.once(Events.ClientReady, (readyClient) => {
     console.log(`Bot connected as ${readyClient.user.tag}`);
@@ -177,15 +155,13 @@ async function bootstrap(): Promise<void> {
     try {
       switch (interaction.commandName) {
         case 'play':
-          await player.context.provide({ guild: interaction.guild }, () =>
-            handlePlay(interaction, player)
-          );
+          await handlePlay(interaction, musicPlayer);
           break;
         case 'skip':
-          await handleSkip(interaction, player);
+          await handleSkip(interaction, musicPlayer);
           break;
         case 'stop':
-          await handleStop(interaction, player);
+          await handleStop(interaction, musicPlayer);
           break;
         default:
           await interaction.reply({

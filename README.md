@@ -17,7 +17,8 @@ Bot Discord orienté musique avec commande slash `/play`, limité à YouTube pou
 - Node.js 22
 - TypeScript
 - `discord.js`
-- `discord-player`
+- `@discordjs/voice`
+- `youtube-dl-exec`
 - Docker
 - GitLab CI
 
