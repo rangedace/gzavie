@@ -9,7 +9,12 @@ import {
   joinVoiceChannel
 } from '@discordjs/voice';
 import type { Guild, VoiceBasedChannel } from 'discord.js';
-import { Collection } from 'discord.js';
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  Collection
+} from 'discord.js';
 import { spawn } from 'node:child_process';
 import youtubedl from 'youtube-dl-exec';
 
@@ -19,6 +24,7 @@ import type { GuildPlaybackSession, PlayContext, QueuedTrack } from './types.js'
 const SEARCH_FORMAT = 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best';
 const VOICE_READY_TIMEOUT_MS = 30_000;
 const DISCONNECT_DELAY_MS = 30_000;
+const CONTROL_PREFIX = 'player';
 
 function isUrl(value: string): boolean {
   try {
@@ -172,12 +178,59 @@ export class MusicPlayer {
   skip(guildId: string): QueuedTrack | null {
     const session = this.sessions.get(guildId);
 
+    if (!session || !session.currentTrack || session.isTransitioning) {
+      return null;
+    }
+
+    session.isTransitioning = true;
+    session.audioPlayer.stop(true);
+    return session.currentTrack;
+  }
+
+  previous(guildId: string): QueuedTrack | null {
+    const session = this.sessions.get(guildId);
+
+    if (!session || session.isTransitioning) {
+      return null;
+    }
+
+    const previousTrack = session.history.pop() ?? null;
+
+    if (!previousTrack) {
+      return null;
+    }
+
+    if (session.currentTrack) {
+      session.queue.unshift(session.currentTrack);
+    }
+
+    session.currentTrack = null;
+    session.queue.unshift(previousTrack);
+    session.isTransitioning = true;
+    session.audioPlayer.stop(true);
+    return previousTrack;
+  }
+
+  togglePause(guildId: string): 'paused' | 'resumed' | null {
+    const session = this.sessions.get(guildId);
+
     if (!session || !session.currentTrack) {
       return null;
     }
 
-    session.audioPlayer.stop(true);
-    return session.currentTrack;
+    if (session.audioPlayer.state.status === AudioPlayerStatus.Paused) {
+      session.audioPlayer.unpause();
+      void this.refreshControlMessage(session);
+      return 'resumed';
+    }
+
+    if (session.audioPlayer.state.status === AudioPlayerStatus.Playing) {
+      session.audioPlayer.pause();
+      void this.refreshControlMessage(session);
+      return 'paused';
+    }
+
+    return null;
   }
 
   stop(guildId: string): boolean {
@@ -203,6 +256,11 @@ export class MusicPlayer {
       : 'rien en cours';
 
     return `${current}, ${session.queue.length} morceau(x) en attente`;
+  }
+
+  isPaused(guildId: string): boolean {
+    const session = this.sessions.get(guildId);
+    return session?.audioPlayer.state.status === AudioPlayerStatus.Paused;
   }
 
   private async getOrCreateSession(
@@ -236,16 +294,29 @@ export class MusicPlayer {
     const session: GuildPlaybackSession = {
       audioPlayer,
       connection,
+      controlMessage: null,
       currentProcesses: [],
       currentTrack: null,
       guildId: guild.id,
+      history: [],
+      isTransitioning: false,
       queue: [],
       textChannel,
       voiceChannel
     };
 
     audioPlayer.on(AudioPlayerStatus.Idle, () => {
+      session.isTransitioning = false;
       void this.playNext(session);
+    });
+
+    audioPlayer.on(AudioPlayerStatus.Playing, () => {
+      session.isTransitioning = false;
+      void this.refreshControlMessage(session);
+    });
+
+    audioPlayer.on(AudioPlayerStatus.Paused, () => {
+      void this.refreshControlMessage(session);
     });
 
     audioPlayer.on('error', (error) => {
@@ -276,10 +347,12 @@ export class MusicPlayer {
   private async playNext(session: GuildPlaybackSession): Promise<void> {
     this.stopCurrentProcess(session);
 
+    const previousTrack = session.currentTrack;
     const nextTrack = session.queue.shift() ?? null;
     session.currentTrack = nextTrack;
 
     if (!nextTrack) {
+      await this.refreshControlMessage(session);
       setTimeout(() => {
         const currentSession = this.sessions.get(session.guildId);
         if (!currentSession || currentSession.currentTrack || currentSession.queue.length > 0) {
@@ -292,6 +365,10 @@ export class MusicPlayer {
     }
 
     try {
+      if (previousTrack) {
+        session.history.push(previousTrack);
+      }
+
       const { ffmpeg, ytDlp } = createPlaybackProcesses(nextTrack);
       session.currentProcesses = [ytDlp, ffmpeg];
 
@@ -334,9 +411,7 @@ export class MusicPlayer {
       resource.volume?.setVolume(0.7);
       session.audioPlayer.play(resource);
 
-      await session.textChannel.send(
-        `Lecture: **${nextTrack.title}**${nextTrack.author ? ` par **${nextTrack.author}**` : ''} (${formatDuration(nextTrack.durationMs)})`
-      );
+      await this.refreshControlMessage(session);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown playback error';
       console.error(`[playback:${session.guildId}]`, error);
@@ -357,9 +432,92 @@ export class MusicPlayer {
   private destroySession(session: GuildPlaybackSession): void {
     this.stopCurrentProcess(session);
     session.queue.length = 0;
+    session.history.length = 0;
     session.currentTrack = null;
+    session.isTransitioning = false;
     session.audioPlayer.stop(true);
     session.connection.destroy();
     this.sessions.delete(session.guildId);
+    void this.refreshControlMessage(session);
+  }
+
+  private async refreshControlMessage(session: GuildPlaybackSession): Promise<void> {
+    const message = this.buildNowPlayingText(session);
+    const components = [this.buildControls(session)];
+
+    if (session.controlMessage) {
+      try {
+        await session.controlMessage.edit({
+          components,
+          content: message
+        });
+        return;
+      } catch {
+        session.controlMessage = null;
+      }
+    }
+
+    if (!session.currentTrack) {
+      return;
+    }
+
+    const sent = await session.textChannel.send(message);
+    session.controlMessage = await sent.edit({
+      components,
+      content: message
+    });
+  }
+
+  private buildNowPlayingText(session: GuildPlaybackSession): string {
+    if (!session.currentTrack) {
+      return 'Lecture terminée.';
+    }
+
+    const state =
+      session.audioPlayer.state.status === AudioPlayerStatus.Paused ? 'pause' : 'lecture';
+
+    return `Lecture: **${session.currentTrack.title}**${session.currentTrack.author ? ` par **${session.currentTrack.author}**` : ''} (${formatDuration(session.currentTrack.durationMs)})\nEtat: ${state} | ${session.queue.length} morceau(x) en attente`;
+  }
+
+  private buildControls(session: GuildPlaybackSession) {
+    const paused = session.audioPlayer.state.status === AudioPlayerStatus.Paused;
+    const disabled = session.currentTrack === null;
+
+    return new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${CONTROL_PREFIX}:previous:${session.guildId}`)
+        .setEmoji('⏮️')
+        .setLabel('Precedent')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(disabled || session.history.length === 0),
+      new ButtonBuilder()
+        .setCustomId(`${CONTROL_PREFIX}:pause:${session.guildId}`)
+        .setEmoji(paused ? '▶️' : '⏸️')
+        .setLabel(paused ? 'Reprendre' : 'Pause')
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(disabled),
+      new ButtonBuilder()
+        .setCustomId(`${CONTROL_PREFIX}:skip:${session.guildId}`)
+        .setEmoji('⏭️')
+        .setLabel('Suivant')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(disabled),
+      new ButtonBuilder()
+        .setCustomId(`${CONTROL_PREFIX}:stop:${session.guildId}`)
+        .setEmoji('⏹️')
+        .setLabel('Stop')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(disabled)
+    );
+  }
+
+  parseControlCustomId(customId: string): { action: string; guildId: string } | null {
+    const [prefix, action, guildId] = customId.split(':');
+
+    if (prefix !== CONTROL_PREFIX || !action || !guildId) {
+      return null;
+    }
+
+    return { action, guildId };
   }
 }

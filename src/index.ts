@@ -5,6 +5,7 @@ import {
   GatewayIntentBits,
   GuildMember,
   MessageFlags,
+  type ButtonInteraction,
   type ChatInputCommandInteraction,
   type VoiceBasedChannel
 } from 'discord.js';
@@ -40,6 +41,28 @@ async function ensureQueueAccess(
   }
 
   return { channel };
+}
+
+async function ensureButtonAccess(interaction: ButtonInteraction): Promise<VoiceBasedChannel | null> {
+  if (!interaction.inCachedGuild() || !(interaction.member instanceof GuildMember)) {
+    await interaction.reply({
+      content: 'Interaction invalide.',
+      flags: MessageFlags.Ephemeral
+    });
+    return null;
+  }
+
+  const channel = interaction.member.voice.channel;
+
+  if (!isSupportedVoiceChannel(channel)) {
+    await interaction.reply({
+      content: 'Rejoins un salon vocal pour utiliser ces boutons.',
+      flags: MessageFlags.Ephemeral
+    });
+    return null;
+  }
+
+  return channel;
 }
 
 async function handlePlay(interaction: ChatInputCommandInteraction, musicPlayer: MusicPlayer): Promise<void> {
@@ -131,6 +154,74 @@ async function handleStop(interaction: ChatInputCommandInteraction, musicPlayer:
   await interaction.reply('Lecture arrêtée, file vidée et vocal quitté.');
 }
 
+async function handleControlButton(interaction: ButtonInteraction, musicPlayer: MusicPlayer): Promise<void> {
+  const parsed = musicPlayer.parseControlCustomId(interaction.customId);
+
+  if (!parsed || parsed.guildId !== interaction.guildId) {
+    await interaction.reply({
+      content: 'Bouton invalide.',
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
+
+  const voiceChannel = await ensureButtonAccess(interaction);
+
+  if (!voiceChannel) {
+    return;
+  }
+
+  switch (parsed.action) {
+    case 'previous':
+      if (!musicPlayer.previous(interaction.guildId!)) {
+        await interaction.reply({
+          content: 'Aucun titre précédent disponible.',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+      await interaction.deferUpdate();
+      return;
+    case 'pause': {
+      const state = musicPlayer.togglePause(interaction.guildId!);
+      if (!state) {
+        await interaction.reply({
+          content: 'Aucune lecture active.',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+      await interaction.deferUpdate();
+      return;
+    }
+    case 'skip':
+      if (!musicPlayer.skip(interaction.guildId!)) {
+        await interaction.reply({
+          content: 'Aucune musique en cours.',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+      await interaction.deferUpdate();
+      return;
+    case 'stop':
+      if (!musicPlayer.stop(interaction.guildId!)) {
+        await interaction.reply({
+          content: 'Aucune lecture active.',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+      await interaction.deferUpdate();
+      return;
+    default:
+      await interaction.reply({
+        content: 'Action non prise en charge.',
+        flags: MessageFlags.Ephemeral
+      });
+  }
+}
+
 async function bootstrap(): Promise<void> {
   await registerSlashCommands();
 
@@ -148,6 +239,11 @@ async function bootstrap(): Promise<void> {
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
+    if (interaction.isButton()) {
+      await handleControlButton(interaction, musicPlayer);
+      return;
+    }
+
     if (!interaction.isChatInputCommand() || !interaction.inCachedGuild()) {
       return;
     }
