@@ -1,0 +1,125 @@
+name: ci-cd
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/gzavie-discord-music-bot
+  REGISTRY: ghcr.io
+  DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+  SSH_HOST: ${{ vars.SSH_HOST }}
+  SSH_PORT: ${{ vars.SSH_PORT }}
+  SSH_USER: ${{ vars.SSH_USER }}
+
+jobs:
+  build_app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+  docker_image:
+    needs:
+      - build_app
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy_prod:
+    needs:
+      - docker_image
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Network precheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y netcat-openbsd
+          echo "Runner egress IP:"
+          curl -s https://api.ipify.org
+          echo
+          echo "Checking TCP reachability to ${SSH_HOST}:${SSH_PORT}..."
+          nc -vz -w 8 "${SSH_HOST}" "${SSH_PORT}"
+
+      - name: Deploy to production server
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY_B64: ${{ secrets.SSH_PRIVATE_KEY_B64 }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+        run: |
+          set -euo pipefail
+
+          eval "$(ssh-agent -s)"
+          echo "$SSH_PRIVATE_KEY_B64" | tr -d '\r' | base64 -d | ssh-add -
+
+          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p ${SSH_PORT}"
+          REMOTE="${SSH_USER}@${SSH_HOST}"
+
+          cleanup() {
+            ssh $SSH_OPTS "$REMOTE" "docker logout \"${REGISTRY}\" >/dev/null 2>&1 || true" || true
+          }
+          trap cleanup EXIT
+
+          ssh $SSH_OPTS "$REMOTE" "mkdir -p \"${DEPLOY_PATH}\""
+          ssh $SSH_OPTS "$REMOTE" "cat > \"${DEPLOY_PATH}/docker-compose.yml\"" < docker-compose.yml
+          ssh $SSH_OPTS "$REMOTE" "test -f \"${DEPLOY_PATH}/.env\" || { echo \"Missing ${DEPLOY_PATH}/.env (create it once on the server).\"; exit 1; }"
+
+          printf '%s' "$GHCR_PAT" | ssh $SSH_OPTS "$REMOTE" "docker login \"${REGISTRY}\" -u \"${GHCR_USERNAME}\" --password-stdin && cd \"${DEPLOY_PATH}\" && docker compose --env-file \"${DEPLOY_PATH}/.env\" -f \"${DEPLOY_PATH}/docker-compose.yml\" pull && docker compose --env-file \"${DEPLOY_PATH}/.env\" -f \"${DEPLOY_PATH}/docker-compose.yml\" up -d --remove-orphans"

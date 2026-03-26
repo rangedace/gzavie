@@ -20,7 +20,7 @@ Bot Discord orienté musique avec commande slash `/play`, limité à YouTube pou
 - `@discordjs/voice`
 - `youtube-dl-exec`
 - Docker
-- GitLab CI
+- GitHub Actions
 
 ## Configuration
 
@@ -52,10 +52,10 @@ npm start
 
 ## Docker
 
-Image publiée par la CI GitLab:
+Image publiée par la CI GitHub:
 
 ```bash
-registry.gitlab.com/olivieridamien89/gzavie/gzavie-discord-music-bot:latest
+ghcr.io/olivieridamien89/gzavie-discord-music-bot:latest
 ```
 
 Déploiement Portainer:
@@ -69,10 +69,10 @@ Le fichier `docker-compose.yml` peut servir de base à une stack Portainer.
 Déclare `DISCORD_TOKEN` et `DISCORD_CLIENT_ID` dans l’UI Portainer ou dans l’environnement de la stack.
 Le compose utilise `network_mode: host` pour éviter les soucis de session voice/UDP avec Discord dans Docker sur Linux.
 
-## GitLab CI
+## GitHub CI/CD
 
-Le pipeline `.gitlab-ci.yml`:
+Le workflow `.github/workflows/ci-cd.yml`:
 
 - lance le build TypeScript
-- construit l’image Docker
-- pousse l’image dans le registry GitLab
+- construit/pousse l’image Docker vers GHCR
+- déploie sur le serveur en SSH avec `docker compose pull && up -d` sur la branche par défaut
