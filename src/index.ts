@@ -5,6 +5,7 @@ import {
   GatewayIntentBits,
   GuildMember,
   MessageFlags,
+  type AutocompleteInteraction,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type VoiceBasedChannel
@@ -222,6 +223,31 @@ async function handleControlButton(interaction: ButtonInteraction, musicPlayer: 
   }
 }
 
+async function handleAutocomplete(
+  interaction: AutocompleteInteraction,
+  musicPlayer: MusicPlayer
+): Promise<void> {
+  if (interaction.commandName !== 'play') {
+    await interaction.respond([]);
+    return;
+  }
+
+  const focused = interaction.options.getFocused(true);
+
+  if (focused.name !== 'query' || typeof focused.value !== 'string') {
+    await interaction.respond([]);
+    return;
+  }
+
+  try {
+    const choices = await musicPlayer.getPlaySuggestions(focused.value);
+    await interaction.respond(choices);
+  } catch (error) {
+    console.error('Autocomplete error', error);
+    await interaction.respond([]);
+  }
+}
+
 async function bootstrap(): Promise<void> {
   await registerSlashCommands();
 
@@ -239,6 +265,11 @@ async function bootstrap(): Promise<void> {
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
+    if (interaction.isAutocomplete()) {
+      await handleAutocomplete(interaction, musicPlayer);
+      return;
+    }
+
     if (interaction.isButton()) {
       await handleControlButton(interaction, musicPlayer);
       return;

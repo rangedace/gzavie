@@ -1,9 +1,16 @@
 import type { AudioPlayer, VoiceConnection } from '@discordjs/voice';
-import type { GuildMember, Message, Snowflake, TextBasedChannel, VoiceBasedChannel } from 'discord.js';
+import type {
+  GuildMember,
+  Message,
+  MessageCreateOptions,
+  Snowflake,
+  TextBasedChannel,
+  VoiceBasedChannel
+} from 'discord.js';
 import type { ChildProcess } from 'node:child_process';
 
 export type BotTextChannel = TextBasedChannel & {
-  send(content: string): Promise<Message>;
+  send(options: string | MessageCreateOptions): Promise<Message>;
 };
 
 export interface QueuedTrack {

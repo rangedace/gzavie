@@ -8,6 +8,7 @@ export const slashCommands = [
       option
         .setName('query')
         .setDescription('Nom, URL YouTube ou playlist YouTube')
+        .setAutocomplete(true)
         .setRequired(true)
     ),
   new SlashCommandBuilder()

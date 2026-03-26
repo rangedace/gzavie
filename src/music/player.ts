@@ -13,7 +13,8 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  Collection
+  Collection,
+  EmbedBuilder
 } from 'discord.js';
 import { spawn } from 'node:child_process';
 import youtubedl from 'youtube-dl-exec';
@@ -25,6 +26,7 @@ const SEARCH_FORMAT = 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best';
 const VOICE_READY_TIMEOUT_MS = 30_000;
 const DISCONNECT_DELAY_MS = 30_000;
 const CONTROL_PREFIX = 'player';
+const AUTOCOMPLETE_LIMIT = 10;
 
 function isUrl(value: string): boolean {
   try {
@@ -40,6 +42,14 @@ function formatDuration(durationMs: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+function truncate(value: string, max: number): string {
+  if (value.length <= max) {
+    return value;
+  }
+
+  return `${value.slice(0, Math.max(1, max - 1))}…`;
 }
 
 function mapTrack(entry: Record<string, unknown>, requestedById: string): QueuedTrack | null {
@@ -95,6 +105,30 @@ async function resolveTracks(query: string, requestedById: string): Promise<Queu
   return tracks;
 }
 
+async function resolveTrackSuggestions(query: string): Promise<QueuedTrack[]> {
+  const payload = await youtubedl(query, {
+    defaultSearch: isUrl(query) ? undefined : `ytsearch${AUTOCOMPLETE_LIMIT}`,
+    dumpSingleJson: true,
+    format: SEARCH_FORMAT,
+    noCheckCertificates: true,
+    noWarnings: true,
+    preferFreeFormats: true,
+    skipDownload: true
+  });
+
+  if (typeof payload !== 'object' || payload === null) {
+    return [];
+  }
+
+  const data = payload as Record<string, unknown>;
+  const entries = Array.isArray(data.entries) ? data.entries : [data];
+
+  return entries
+    .map((entry) => (typeof entry === 'object' && entry !== null ? mapTrack(entry, 'autocomplete') : null))
+    .filter((entry): entry is QueuedTrack => entry !== null)
+    .slice(0, AUTOCOMPLETE_LIMIT);
+}
+
 function createPlaybackProcesses(track: QueuedTrack) {
   const ytDlp = youtubedl.exec(
     track.url,
@@ -147,6 +181,35 @@ function createPlaybackProcesses(track: QueuedTrack) {
 
 export class MusicPlayer {
   private readonly sessions = new Collection<string, GuildPlaybackSession>();
+
+  async getPlaySuggestions(query: string): Promise<Array<{ name: string; value: string }>> {
+    const trimmed = query.trim();
+
+    if (trimmed.length < 2) {
+      return [];
+    }
+
+    const tracks = await resolveTrackSuggestions(trimmed);
+    const deduped = new Map<string, { name: string; value: string }>();
+
+    for (const track of tracks) {
+      if (deduped.size >= AUTOCOMPLETE_LIMIT) {
+        break;
+      }
+
+      const label = truncate(
+        `${track.title}${track.author ? ` - ${track.author}` : ''} [${formatDuration(track.durationMs)}]`,
+        100
+      );
+      const value = track.url.length <= 100 ? track.url : truncate(track.title, 100);
+
+      if (!deduped.has(value)) {
+        deduped.set(value, { name: label, value });
+      }
+    }
+
+    return [...deduped.values()];
+  }
 
   async enqueue(context: PlayContext): Promise<{ added: QueuedTrack[]; current: QueuedTrack }> {
     const voiceChannel = context.member.voice.channel;
@@ -442,14 +505,15 @@ export class MusicPlayer {
   }
 
   private async refreshControlMessage(session: GuildPlaybackSession): Promise<void> {
-    const message = this.buildNowPlayingText(session);
+    const payload = this.buildNowPlayingMessage(session);
     const components = [this.buildControls(session)];
 
     if (session.controlMessage) {
       try {
         await session.controlMessage.edit({
           components,
-          content: message
+          content: payload.content,
+          embeds: payload.embeds
         });
         return;
       } catch {
@@ -461,22 +525,44 @@ export class MusicPlayer {
       return;
     }
 
-    const sent = await session.textChannel.send(message);
+    const sent = await session.textChannel.send({
+      components,
+      content: payload.content,
+      embeds: payload.embeds
+    });
     session.controlMessage = await sent.edit({
       components,
-      content: message
+      content: payload.content,
+      embeds: payload.embeds
     });
   }
 
-  private buildNowPlayingText(session: GuildPlaybackSession): string {
+  private buildNowPlayingMessage(session: GuildPlaybackSession): { content: string; embeds: EmbedBuilder[] } {
     if (!session.currentTrack) {
-      return 'Lecture terminée.';
+      return {
+        content: 'Lecture terminée.',
+        embeds: []
+      };
     }
 
     const state =
       session.audioPlayer.state.status === AudioPlayerStatus.Paused ? 'pause' : 'lecture';
+    const embed = new EmbedBuilder()
+      .setColor(0x2f3136)
+      .setTitle(session.currentTrack.title)
+      .setURL(session.currentTrack.url)
+      .setDescription(
+        `${session.currentTrack.author ? `Par **${session.currentTrack.author}**` : 'Auteur inconnu'}\nDuree: ${formatDuration(session.currentTrack.durationMs)}\nEtat: ${state} | ${session.queue.length} morceau(x) en attente`
+      );
 
-    return `Lecture: **${session.currentTrack.title}**${session.currentTrack.author ? ` par **${session.currentTrack.author}**` : ''} (${formatDuration(session.currentTrack.durationMs)})\nEtat: ${state} | ${session.queue.length} morceau(x) en attente`;
+    if (session.currentTrack.thumbnail) {
+      embed.setThumbnail(session.currentTrack.thumbnail);
+    }
+
+    return {
+      content: 'Lecture en cours:',
+      embeds: [embed]
+    };
   }
 
   private buildControls(session: GuildPlaybackSession) {
