@@ -27,7 +27,6 @@ const VOICE_READY_TIMEOUT_MS = 30_000;
 const DISCONNECT_DELAY_MS = 30_000;
 const CONTROL_PREFIX = 'player';
 const AUTOCOMPLETE_LIMIT = 10;
-const AUTOCOMPLETE_TIMEOUT_MS = 2_000;
 
 function isUrl(value: string): boolean {
   try {
@@ -110,7 +109,9 @@ async function resolveTrackSuggestions(query: string): Promise<QueuedTrack[]> {
   const payload = await youtubedl(query, {
     defaultSearch: isUrl(query) ? undefined : `ytsearch${AUTOCOMPLETE_LIMIT}`,
     dumpSingleJson: true,
+    flatPlaylist: true,
     format: SEARCH_FORMAT,
+    callHome: false,
     noCheckCertificates: true,
     noWarnings: true,
     preferFreeFormats: true,
@@ -125,7 +126,42 @@ async function resolveTrackSuggestions(query: string): Promise<QueuedTrack[]> {
   const entries = Array.isArray(data.entries) ? data.entries : [data];
 
   return entries
-    .map((entry) => (typeof entry === 'object' && entry !== null ? mapTrack(entry, 'autocomplete') : null))
+    .map((entry) => {
+      if (typeof entry !== 'object' || entry === null) {
+        return null;
+      }
+
+      const record = entry as Record<string, unknown>;
+      const title = typeof record.title === 'string' ? record.title : null;
+      const webpageUrl =
+        typeof record.webpage_url === 'string'
+          ? record.webpage_url
+          : typeof record.url === 'string' && /^https?:\/\//.test(record.url)
+            ? record.url
+            : typeof record.id === 'string'
+              ? `https://www.youtube.com/watch?v=${record.id}`
+              : null;
+
+      if (!title || !webpageUrl) {
+        return null;
+      }
+
+      const duration = typeof record.duration === 'number' ? record.duration : 0;
+
+      return {
+        author:
+          typeof record.uploader === 'string'
+            ? record.uploader
+            : typeof record.channel === 'string'
+              ? record.channel
+              : 'Unknown',
+        durationMs: duration * 1000,
+        requestedById: 'autocomplete',
+        thumbnail: typeof record.thumbnail === 'string' ? record.thumbnail : null,
+        title,
+        url: webpageUrl
+      } satisfies QueuedTrack;
+    })
     .filter((entry): entry is QueuedTrack => entry !== null)
     .slice(0, AUTOCOMPLETE_LIMIT);
 }
@@ -195,10 +231,7 @@ export class MusicPlayer {
       return [];
     }
 
-    const tracks = await Promise.race<QueuedTrack[]>([
-      resolveTrackSuggestions(trimmed),
-      new Promise<QueuedTrack[]>(resolve => setTimeout(() => resolve([]), AUTOCOMPLETE_TIMEOUT_MS))
-    ]);
+    const tracks = await resolveTrackSuggestions(trimmed);
     const deduped = new Map<string, { name: string; value: string }>();
 
     for (const track of tracks) {

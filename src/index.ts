@@ -271,6 +271,7 @@ async function handleAutocomplete(
 
   try {
     const choices = await musicPlayer.getPlaySuggestions(focused.value);
+    console.log(`[autocomplete] "${focused.value}" -> ${choices.length} choice(s)`);
     await safeAutocompleteRespond(interaction, choices);
   } catch (error) {
     console.error('Autocomplete error', error);
