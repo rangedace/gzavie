@@ -7,6 +7,7 @@ on:
       - main
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/gzavie-discord-music-bot
   REGISTRY: ghcr.io
   DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || vars.DEPLOY_PATH || '/opt/gzavie' }}
@@ -127,7 +128,10 @@ jobs:
           REMOTE="${SSH_USER}@${SSH_HOST}"
 
           cleanup() {
-            ssh $SSH_OPTS "$REMOTE" "docker logout \"${REGISTRY}\" >/dev/null 2>&1 || true" || true
+            for i in 1 2 3; do
+              ssh $SSH_OPTS "$REMOTE" "docker logout \"${REGISTRY}\" >/dev/null 2>&1 || true" && break || true
+              sleep 1
+            done
           }
           trap cleanup EXIT
 

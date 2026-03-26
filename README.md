@@ -55,7 +55,7 @@ npm start
 Image publiée par la CI GitHub:
 
 ```bash
-ghcr.io/olivieridamien89/gzavie-discord-music-bot:latest
+ghcr.io/rangedace/gzavie-discord-music-bot:latest
 ```
 
 Déploiement Portainer:
