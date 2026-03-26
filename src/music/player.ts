@@ -27,6 +27,8 @@ const VOICE_READY_TIMEOUT_MS = 30_000;
 const DISCONNECT_DELAY_MS = 30_000;
 const CONTROL_PREFIX = 'player';
 const AUTOCOMPLETE_LIMIT = 10;
+const AUTOCOMPLETE_TIMEOUT_MS = 1_500;
+const AUTOCOMPLETE_CACHE_TTL_MS = 60_000;
 
 function isUrl(value: string): boolean {
   try {
@@ -218,6 +220,7 @@ function createPlaybackProcesses(track: QueuedTrack) {
 
 export class MusicPlayer {
   private readonly sessions = new Collection<string, GuildPlaybackSession>();
+  private readonly autocompleteCache = new Map<string, { choices: Array<{ name: string; value: string }>; ts: number }>();
 
   hasNextTrack(guildId: string): boolean {
     const session = this.sessions.get(guildId);
@@ -231,7 +234,25 @@ export class MusicPlayer {
       return [];
     }
 
-    const tracks = await resolveTrackSuggestions(trimmed);
+    const normalized = trimmed.toLowerCase();
+    const now = Date.now();
+    const cached = this.autocompleteCache.get(normalized);
+
+    if (cached && now - cached.ts <= AUTOCOMPLETE_CACHE_TTL_MS) {
+      return cached.choices;
+    }
+
+    const prefixFallback = this.getPrefixFallback(normalized, now);
+
+    const tracks = await Promise.race<QueuedTrack[]>([
+      resolveTrackSuggestions(trimmed),
+      new Promise<QueuedTrack[]>(resolve => setTimeout(() => resolve([]), AUTOCOMPLETE_TIMEOUT_MS))
+    ]);
+
+    if (tracks.length === 0) {
+      return prefixFallback;
+    }
+
     const deduped = new Map<string, { name: string; value: string }>();
 
     for (const track of tracks) {
@@ -250,7 +271,31 @@ export class MusicPlayer {
       }
     }
 
-    return [...deduped.values()];
+    const choices = [...deduped.values()];
+    this.autocompleteCache.set(normalized, { choices, ts: now });
+    return choices.length > 0 ? choices : prefixFallback;
+  }
+
+  private getPrefixFallback(
+    normalizedQuery: string,
+    now: number
+  ): Array<{ name: string; value: string }> {
+    let bestMatchLength = -1;
+    let bestChoices: Array<{ name: string; value: string }> = [];
+
+    for (const [key, value] of this.autocompleteCache.entries()) {
+      if (now - value.ts > AUTOCOMPLETE_CACHE_TTL_MS) {
+        this.autocompleteCache.delete(key);
+        continue;
+      }
+
+      if (normalizedQuery.startsWith(key) && value.choices.length > 0 && key.length > bestMatchLength) {
+        bestMatchLength = key.length;
+        bestChoices = value.choices;
+      }
+    }
+
+    return bestChoices;
   }
 
   async enqueue(context: PlayContext): Promise<{ added: QueuedTrack[]; current: QueuedTrack }> {

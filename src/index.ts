@@ -270,8 +270,11 @@ async function handleAutocomplete(
   }
 
   try {
+    const startedAt = Date.now();
     const choices = await musicPlayer.getPlaySuggestions(focused.value);
-    console.log(`[autocomplete] "${focused.value}" -> ${choices.length} choice(s)`);
+    console.log(
+      `[autocomplete] "${focused.value}" -> ${choices.length} choice(s) in ${Date.now() - startedAt}ms`
+    );
     await safeAutocompleteRespond(interaction, choices);
   } catch (error) {
     console.error('Autocomplete error', error);
