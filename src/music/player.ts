@@ -27,6 +27,7 @@ const VOICE_READY_TIMEOUT_MS = 30_000;
 const DISCONNECT_DELAY_MS = 30_000;
 const CONTROL_PREFIX = 'player';
 const AUTOCOMPLETE_LIMIT = 10;
+const AUTOCOMPLETE_TIMEOUT_MS = 2_000;
 
 function isUrl(value: string): boolean {
   try {
@@ -182,14 +183,22 @@ function createPlaybackProcesses(track: QueuedTrack) {
 export class MusicPlayer {
   private readonly sessions = new Collection<string, GuildPlaybackSession>();
 
+  hasNextTrack(guildId: string): boolean {
+    const session = this.sessions.get(guildId);
+    return Boolean(session && session.currentTrack && session.queue.length > 0);
+  }
+
   async getPlaySuggestions(query: string): Promise<Array<{ name: string; value: string }>> {
     const trimmed = query.trim();
 
-    if (trimmed.length < 2) {
+    if (trimmed.length < 3) {
       return [];
     }
 
-    const tracks = await resolveTrackSuggestions(trimmed);
+    const tracks = await Promise.race<QueuedTrack[]>([
+      resolveTrackSuggestions(trimmed),
+      new Promise<QueuedTrack[]>(resolve => setTimeout(() => resolve([]), AUTOCOMPLETE_TIMEOUT_MS))
+    ]);
     const deduped = new Map<string, { name: string; value: string }>();
 
     for (const track of tracks) {
@@ -230,6 +239,8 @@ export class MusicPlayer {
 
     if (!session.currentTrack) {
       await this.playNext(session);
+    } else {
+      void this.refreshControlMessage(session);
     }
 
     return {
@@ -246,6 +257,7 @@ export class MusicPlayer {
     }
 
     session.isTransitioning = true;
+    void this.refreshControlMessage(session);
     session.audioPlayer.stop(true);
     return session.currentTrack;
   }
@@ -270,6 +282,7 @@ export class MusicPlayer {
     session.currentTrack = null;
     session.queue.unshift(previousTrack);
     session.isTransitioning = true;
+    void this.refreshControlMessage(session);
     session.audioPlayer.stop(true);
     return previousTrack;
   }
@@ -540,7 +553,7 @@ export class MusicPlayer {
   private buildNowPlayingMessage(session: GuildPlaybackSession): { content: string; embeds: EmbedBuilder[] } {
     if (!session.currentTrack) {
       return {
-        content: 'Lecture terminée.',
+        content: '',
         embeds: []
       };
     }
@@ -549,18 +562,27 @@ export class MusicPlayer {
       session.audioPlayer.state.status === AudioPlayerStatus.Paused ? 'pause' : 'lecture';
     const embed = new EmbedBuilder()
       .setColor(0x2f3136)
+      .setAuthor({
+        name: state === 'pause' ? 'En pause' : 'Lecture en cours'
+      })
       .setTitle(session.currentTrack.title)
       .setURL(session.currentTrack.url)
       .setDescription(
-        `${session.currentTrack.author ? `Par **${session.currentTrack.author}**` : 'Auteur inconnu'}\nDuree: ${formatDuration(session.currentTrack.durationMs)}\nEtat: ${state} | ${session.queue.length} morceau(x) en attente`
+        `${session.currentTrack.author ? `Par **${session.currentTrack.author}**` : 'Auteur inconnu'}\nDuree: ${formatDuration(session.currentTrack.durationMs)}`
       );
+
+    embed.addFields({
+      inline: false,
+      name: 'Statut',
+      value: `${state} | ${session.queue.length} morceau(x) en attente`
+    });
 
     if (session.currentTrack.thumbnail) {
       embed.setThumbnail(session.currentTrack.thumbnail);
     }
 
     return {
-      content: 'Lecture en cours:',
+      content: '',
       embeds: [embed]
     };
   }
@@ -568,6 +590,7 @@ export class MusicPlayer {
   private buildControls(session: GuildPlaybackSession) {
     const paused = session.audioPlayer.state.status === AudioPlayerStatus.Paused;
     const disabled = session.currentTrack === null;
+    const skipDisabled = disabled || session.isTransitioning || session.queue.length === 0;
 
     return new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
@@ -575,25 +598,25 @@ export class MusicPlayer {
         .setEmoji('⏮️')
         .setLabel('Precedent')
         .setStyle(ButtonStyle.Secondary)
-        .setDisabled(disabled || session.history.length === 0),
+        .setDisabled(disabled || session.isTransitioning || session.history.length === 0),
       new ButtonBuilder()
         .setCustomId(`${CONTROL_PREFIX}:pause:${session.guildId}`)
         .setEmoji(paused ? '▶️' : '⏸️')
         .setLabel(paused ? 'Reprendre' : 'Pause')
         .setStyle(ButtonStyle.Primary)
-        .setDisabled(disabled),
+        .setDisabled(disabled || session.isTransitioning),
       new ButtonBuilder()
         .setCustomId(`${CONTROL_PREFIX}:skip:${session.guildId}`)
         .setEmoji('⏭️')
         .setLabel('Suivant')
         .setStyle(ButtonStyle.Secondary)
-        .setDisabled(disabled),
+        .setDisabled(skipDisabled),
       new ButtonBuilder()
         .setCustomId(`${CONTROL_PREFIX}:stop:${session.guildId}`)
         .setEmoji('⏹️')
         .setLabel('Stop')
         .setStyle(ButtonStyle.Danger)
-        .setDisabled(disabled)
+        .setDisabled(disabled || session.isTransitioning)
     );
   }
 

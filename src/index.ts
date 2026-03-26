@@ -15,6 +15,28 @@ import { config } from './config.js';
 import { registerSlashCommands } from './discord/registerCommands.js';
 import { MusicPlayer } from './music/player.js';
 
+function isUnknownInteractionError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 10062
+  );
+}
+
+async function safeAutocompleteRespond(
+  interaction: AutocompleteInteraction,
+  choices: Array<{ name: string; value: string }>
+): Promise<void> {
+  try {
+    await interaction.respond(choices);
+  } catch (error) {
+    if (!isUnknownInteractionError(error)) {
+      throw error;
+    }
+  }
+}
+
 function getMemberVoiceChannel(interaction: ChatInputCommandInteraction): VoiceBasedChannel | null {
   if (!(interaction.member instanceof GuildMember)) {
     return null;
@@ -196,6 +218,14 @@ async function handleControlButton(interaction: ButtonInteraction, musicPlayer: 
       return;
     }
     case 'skip':
+      if (!musicPlayer.hasNextTrack(interaction.guildId!)) {
+        await interaction.reply({
+          content: 'Aucun morceau suivant disponible.',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+
       if (!musicPlayer.skip(interaction.guildId!)) {
         await interaction.reply({
           content: 'Aucune musique en cours.',
@@ -228,23 +258,23 @@ async function handleAutocomplete(
   musicPlayer: MusicPlayer
 ): Promise<void> {
   if (interaction.commandName !== 'play') {
-    await interaction.respond([]);
+    await safeAutocompleteRespond(interaction, []);
     return;
   }
 
   const focused = interaction.options.getFocused(true);
 
   if (focused.name !== 'query' || typeof focused.value !== 'string') {
-    await interaction.respond([]);
+    await safeAutocompleteRespond(interaction, []);
     return;
   }
 
   try {
     const choices = await musicPlayer.getPlaySuggestions(focused.value);
-    await interaction.respond(choices);
+    await safeAutocompleteRespond(interaction, choices);
   } catch (error) {
     console.error('Autocomplete error', error);
-    await interaction.respond([]);
+    await safeAutocompleteRespond(interaction, []);
   }
 }
 
