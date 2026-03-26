@@ -9,9 +9,9 @@ on:
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/gzavie-discord-music-bot
   REGISTRY: ghcr.io
-  DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/gzavie' }}
-  SSH_HOST: ${{ vars.SSH_HOST }}
-  SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+  DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || vars.DEPLOY_PATH || '/opt/gzavie' }}
+  SSH_HOST: ${{ secrets.SSH_HOST || vars.SSH_HOST }}
+  SSH_PORT: ${{ secrets.SSH_PORT || vars.SSH_PORT || '22' }}
   SSH_USER: deploy
 
 jobs:
