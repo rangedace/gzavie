@@ -9,10 +9,10 @@ on:
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/gzavie-discord-music-bot
   REGISTRY: ghcr.io
-  DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+  DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/gzavie' }}
   SSH_HOST: ${{ vars.SSH_HOST }}
-  SSH_PORT: ${{ vars.SSH_PORT }}
-  SSH_USER: ${{ vars.SSH_USER }}
+  SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+  SSH_USER: deploy
 
 jobs:
   build_app:
@@ -85,6 +85,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: Validate deploy config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${SSH_HOST}" ]]; then
+            echo "Missing required GitHub variable: SSH_HOST"
+            exit 1
+          fi
+          if [[ -z "${DEPLOY_PATH}" ]]; then
+            echo "Missing deploy path (DEPLOY_PATH)."
+            exit 1
+          fi
 
       - name: Network precheck
         shell: bash
