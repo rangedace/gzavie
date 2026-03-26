@@ -54,6 +54,26 @@ function truncate(value: string, max: number): string {
   return `${value.slice(0, Math.max(1, max - 1))}…`;
 }
 
+function isIgnorablePipeError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('code' in error)) {
+    return false;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  return code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED';
+}
+
+function toDisplaySuggestion(value: string): string {
+  if (value.toLowerCase() !== value) {
+    return value;
+  }
+
+  return value
+    .split(/\s+/)
+    .map((word) => (word.length > 0 ? `${word[0]!.toUpperCase()}${word.slice(1)}` : word))
+    .join(' ');
+}
+
 function mapTrack(entry: Record<string, unknown>, requestedById: string): QueuedTrack | null {
   const webpageUrl = typeof entry.webpage_url === 'string' ? entry.webpage_url : null;
   const title = typeof entry.title === 'string' ? entry.title : null;
@@ -243,6 +263,26 @@ function createPlaybackProcesses(track: QueuedTrack) {
     throw new Error('Failed to initialize playback subprocess pipes.');
   }
 
+  ytDlp.stdout.on('error', (error) => {
+    if (!isIgnorablePipeError(error)) {
+      console.error('[yt-dlp:pipe]', error);
+    }
+  });
+
+  ffmpeg.stdin.on('error', (error) => {
+    if (!isIgnorablePipeError(error)) {
+      console.error('[ffmpeg:stdin]', error);
+    }
+  });
+
+  ytDlp.on('error', (error) => {
+    console.error('[yt-dlp:process]', error);
+  });
+
+  ffmpeg.on('error', (error) => {
+    console.error('[ffmpeg:process]', error);
+  });
+
   ytDlp.stdout.pipe(ffmpeg.stdin);
 
   return {
@@ -290,7 +330,7 @@ export class MusicPlayer {
         break;
       }
 
-      const label = truncate(suggestion, 100);
+      const label = truncate(toDisplaySuggestion(suggestion), 100);
       const value = truncate(suggestion, 100);
 
       if (!deduped.has(value)) {
