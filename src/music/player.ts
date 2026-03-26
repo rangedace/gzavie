@@ -27,7 +27,7 @@ const VOICE_READY_TIMEOUT_MS = 30_000;
 const DISCONNECT_DELAY_MS = 30_000;
 const CONTROL_PREFIX = 'player';
 const AUTOCOMPLETE_LIMIT = 10;
-const AUTOCOMPLETE_TIMEOUT_MS = 1_500;
+const AUTOCOMPLETE_TIMEOUT_MS = 2_500;
 const AUTOCOMPLETE_CACHE_TTL_MS = 60_000;
 
 function isUrl(value: string): boolean {
@@ -168,6 +168,39 @@ async function resolveTrackSuggestions(query: string): Promise<QueuedTrack[]> {
     .slice(0, AUTOCOMPLETE_LIMIT);
 }
 
+async function resolveQuerySuggestions(query: string): Promise<string[]> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AUTOCOMPLETE_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(
+      `https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q=${encodeURIComponent(query)}`,
+      {
+        method: 'GET',
+        signal: controller.signal
+      }
+    );
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const payload = (await response.json()) as unknown;
+
+    if (!Array.isArray(payload) || payload.length < 2 || !Array.isArray(payload[1])) {
+      return [];
+    }
+
+    return payload[1]
+      .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      .slice(0, AUTOCOMPLETE_LIMIT);
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function createPlaybackProcesses(track: QueuedTrack) {
   const ytDlp = youtubedl.exec(
     track.url,
@@ -244,27 +277,21 @@ export class MusicPlayer {
 
     const prefixFallback = this.getPrefixFallback(normalized, now);
 
-    const tracks = await Promise.race<QueuedTrack[]>([
-      resolveTrackSuggestions(trimmed),
-      new Promise<QueuedTrack[]>(resolve => setTimeout(() => resolve([]), AUTOCOMPLETE_TIMEOUT_MS))
-    ]);
+    const queries = await resolveQuerySuggestions(trimmed);
 
-    if (tracks.length === 0) {
+    if (queries.length === 0) {
       return prefixFallback;
     }
 
     const deduped = new Map<string, { name: string; value: string }>();
 
-    for (const track of tracks) {
+    for (const suggestion of queries) {
       if (deduped.size >= AUTOCOMPLETE_LIMIT) {
         break;
       }
 
-      const label = truncate(
-        `${track.title}${track.author ? ` - ${track.author}` : ''} [${formatDuration(track.durationMs)}]`,
-        100
-      );
-      const value = track.url.length <= 100 ? track.url : truncate(track.title, 100);
+      const label = truncate(suggestion, 100);
+      const value = truncate(suggestion, 100);
 
       if (!deduped.has(value)) {
         deduped.set(value, { name: label, value });
