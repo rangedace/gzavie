@@ -33,10 +33,14 @@ jobs:
         run: apk add --no-cache git nodejs npm openssh-client
 
       - name: Checkout repository
+        env:
+          RUNNER_TOKEN: ${{ github.token }}
         run: |
           set -eu
           rm -rf repo
-          git clone "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" repo
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          git clone "https://token:${RUNNER_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}.git" repo
           cd repo
           git checkout "${GITHUB_SHA}"
 
