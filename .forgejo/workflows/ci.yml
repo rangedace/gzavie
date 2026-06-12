@@ -25,7 +25,7 @@ jobs:
       REGISTRY: git.rangedace.fr
       IMAGE_NAME: git.rangedace.fr/rangedace/gzavie/bot
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
-      PRUNE_UNTIL_HOUR: ${{ vars.PRUNE_UNTIL_HOUR }}
+      PRUNE_UNTIL_HOURS: ${{ vars.PRUNE_UNTIL_HOURS }}
       SSH_HOST: ${{ vars.SSH_HOST }}
       SSH_PORT: ${{ vars.SSH_PORT }}
       SSH_USER: ${{ secrets.SSH_USER }}
@@ -95,7 +95,7 @@ jobs:
           set -eu
 
           : "${DEPLOY_PATH:?DEPLOY_PATH variable is required}"
-          : "${PRUNE_UNTIL_HOUR:?PRUNE_UNTIL_HOUR variable is required}"
+          : "${PRUNE_UNTIL_HOURS:?PRUNE_UNTIL_HOURS variable is required}"
           : "${SSH_HOST:?SSH_HOST variable is required}"
           : "${SSH_PORT:?SSH_PORT variable is required}"
           : "${SSH_USER:?SSH_USER secret is required}"
@@ -103,9 +103,9 @@ jobs:
           : "${REGISTRY_USERNAME:?REGISTRY_USERNAME secret is required}"
           : "${REGISTRY_PASSWORD:?REGISTRY_PASSWORD secret is required}"
 
-          case "$PRUNE_UNTIL_HOUR" in
+          case "$PRUNE_UNTIL_HOURS" in
             ''|*[!0-9]*)
-              echo "PRUNE_UNTIL_HOUR must be a number of hours." >&2
+              echo "PRUNE_UNTIL_HOURS must be a number of hours." >&2
               exit 1
               ;;
           esac
@@ -134,4 +134,4 @@ jobs:
 
           printf '%s' "$REGISTRY_PASSWORD" | ssh $SSH_OPTS "$REMOTE" "docker login '${REGISTRY}' -u '${REGISTRY_USERNAME}' --password-stdin"
           ssh $SSH_OPTS "$REMOTE" "cd '${DEPLOY_PATH}' && export BOT_IMAGE='${DEPLOY_IMAGE}' && docker compose --env-file .env pull && docker compose --env-file .env up -d --remove-orphans"
-          ssh $SSH_OPTS "$REMOTE" "docker image prune -af --filter 'until=${PRUNE_UNTIL_HOUR}h'"
+          ssh $SSH_OPTS "$REMOTE" "docker image prune -af --filter 'until=${PRUNE_UNTIL_HOURS}h'"
