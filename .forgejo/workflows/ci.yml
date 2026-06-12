@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu
     container:
       image: docker:27-cli
     services:
