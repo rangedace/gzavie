@@ -25,13 +25,13 @@ jobs:
       REGISTRY: git.rangedace.fr
       IMAGE_NAME: git.rangedace.fr/rangedace/gzavie/bot
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
-      IMAGE_PRUNE_UNTIL: ${{ vars.IMAGE_PRUNE_UNTIL }}
+      PRUNE_UNTIL_HOUR: ${{ vars.PRUNE_UNTIL_HOUR }}
       SSH_HOST: ${{ vars.SSH_HOST }}
       SSH_PORT: ${{ vars.SSH_PORT }}
       SSH_USER: ${{ secrets.SSH_USER }}
     steps:
       - name: Install tools
-        run: apk add --no-cache git nodejs npm openssh-client
+        run: apk add --no-cache git openssh-client
 
       - name: Checkout repository
         env:
@@ -44,13 +44,6 @@ jobs:
           git clone "https://token:${RUNNER_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}.git" repo
           cd repo
           git checkout "${GITHUB_SHA}"
-
-      - name: Node build
-        run: |
-          set -eu
-          cd repo
-          npm ci
-          npm run build
 
       - name: Wait for Docker daemon
         run: |
@@ -102,7 +95,7 @@ jobs:
           set -eu
 
           : "${DEPLOY_PATH:?DEPLOY_PATH variable is required}"
-          : "${IMAGE_PRUNE_UNTIL:?IMAGE_PRUNE_UNTIL variable is required}"
+          : "${PRUNE_UNTIL_HOUR:?PRUNE_UNTIL_HOUR variable is required}"
           : "${SSH_HOST:?SSH_HOST variable is required}"
           : "${SSH_PORT:?SSH_PORT variable is required}"
           : "${SSH_USER:?SSH_USER secret is required}"
@@ -110,13 +103,12 @@ jobs:
           : "${REGISTRY_USERNAME:?REGISTRY_USERNAME secret is required}"
           : "${REGISTRY_PASSWORD:?REGISTRY_PASSWORD secret is required}"
 
-          case "$IMAGE_PRUNE_UNTIL" in
+          case "$PRUNE_UNTIL_HOUR" in
             ''|*[!0-9]*)
-              echo "IMAGE_PRUNE_UNTIL must be a number of days." >&2
+              echo "PRUNE_UNTIL_HOUR must be a number of hours." >&2
               exit 1
               ;;
           esac
-          PRUNE_UNTIL_HOURS="$((IMAGE_PRUNE_UNTIL * 24))h"
 
           SHA_TAG="${GITHUB_SHA}"
           DEPLOY_IMAGE="${IMAGE_NAME}:${SHA_TAG}"
@@ -142,4 +134,4 @@ jobs:
 
           printf '%s' "$REGISTRY_PASSWORD" | ssh $SSH_OPTS "$REMOTE" "docker login '${REGISTRY}' -u '${REGISTRY_USERNAME}' --password-stdin"
           ssh $SSH_OPTS "$REMOTE" "cd '${DEPLOY_PATH}' && export BOT_IMAGE='${DEPLOY_IMAGE}' && docker compose --env-file .env pull && docker compose --env-file .env up -d --remove-orphans"
-          ssh $SSH_OPTS "$REMOTE" "docker image prune -af --filter 'until=${PRUNE_UNTIL_HOURS}'"
+          ssh $SSH_OPTS "$REMOTE" "docker image prune -af --filter 'until=${PRUNE_UNTIL_HOUR}h'"
