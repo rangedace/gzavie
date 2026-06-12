@@ -1,0 +1,130 @@
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    container:
+      image: docker:27-cli
+    services:
+      docker:
+        image: docker:27-dind
+        options: --privileged
+    env:
+      DOCKER_HOST: tcp://docker:2375
+      DOCKER_TLS_CERTDIR: ""
+      DOCKER_BUILDKIT: 1
+      REGISTRY: git.rangedace.fr
+      IMAGE_NAME: git.rangedace.fr/rangedace/gzavie/bot
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      SSH_HOST: ${{ vars.SSH_HOST }}
+      SSH_PORT: ${{ vars.SSH_PORT }}
+      SSH_USER: deploy
+    steps:
+      - name: Install tools
+        run: apk add --no-cache git nodejs npm openssh-client
+
+      - name: Checkout repository
+        run: |
+          set -eu
+          rm -rf repo
+          git clone "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "${GITHUB_SHA}"
+
+      - name: Node build
+        run: |
+          set -eu
+          cd repo
+          npm ci
+          npm run build
+
+      - name: Wait for Docker daemon
+        run: |
+          set -eu
+          for i in $(seq 1 30); do
+            if docker version >/dev/null 2>&1; then
+              echo "Docker daemon ready."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Docker daemon did not become ready in time." >&2
+          docker version
+          exit 1
+
+      - name: Build smoke (PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -eu
+          cd repo
+          docker build -t gzavie-bot:pr .
+
+      - name: Login to Forgejo Registry
+        if: github.event_name == 'push'
+        run: |
+          set -eu
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "${REGISTRY}" -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+
+      - name: Build and push image
+        if: github.event_name == 'push'
+        run: |
+          set -eu
+          cd repo
+          SHA_TAG="${GITHUB_SHA}"
+          docker build \
+            -t "${IMAGE_NAME}:latest" \
+            -t "${IMAGE_NAME}:${SHA_TAG}" \
+            .
+          docker push "${IMAGE_NAME}:latest"
+          docker push "${IMAGE_NAME}:${SHA_TAG}"
+
+      - name: Deploy to production
+        if: github.event_name == 'push'
+        env:
+          SSH_PRIVATE_KEY_B64: ${{ secrets.SSH_PRIVATE_KEY_B64 }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          set -eu
+
+          : "${DEPLOY_PATH:?DEPLOY_PATH variable is required}"
+          : "${SSH_HOST:?SSH_HOST variable is required}"
+          : "${SSH_PORT:?SSH_PORT variable is required}"
+          : "${SSH_PRIVATE_KEY_B64:?SSH_PRIVATE_KEY_B64 secret is required}"
+          : "${REGISTRY_USERNAME:?REGISTRY_USERNAME secret is required}"
+          : "${REGISTRY_PASSWORD:?REGISTRY_PASSWORD secret is required}"
+
+          SHA_TAG="${GITHUB_SHA}"
+          DEPLOY_IMAGE="${IMAGE_NAME}:${SHA_TAG}"
+
+          mkdir -p ~/.ssh
+          KEY_PATH="$HOME/.ssh/deploy_key"
+          echo "$SSH_PRIVATE_KEY_B64" | tr -d '\r' | base64 -d > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+
+          SSH_OPTS="-i ${KEY_PATH} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p ${SSH_PORT}"
+          SCP_OPTS="-i ${KEY_PATH} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P ${SSH_PORT}"
+          REMOTE="${SSH_USER}@${SSH_HOST}"
+
+          cleanup() {
+            ssh $SSH_OPTS "$REMOTE" "docker logout '${REGISTRY}' >/dev/null 2>&1 || true" || true
+            rm -f "$KEY_PATH"
+          }
+          trap cleanup EXIT
+
+          ssh $SSH_OPTS "$REMOTE" "mkdir -p '${DEPLOY_PATH}'"
+          scp $SCP_OPTS repo/docker-compose.yml "$REMOTE:${DEPLOY_PATH}/docker-compose.yml"
+          ssh $SSH_OPTS "$REMOTE" "test -f '${DEPLOY_PATH}/.env' || { echo 'Missing ${DEPLOY_PATH}/.env (create it once on the server).'; exit 1; }"
+
+          printf '%s' "$REGISTRY_PASSWORD" | ssh $SSH_OPTS "$REMOTE" "docker login '${REGISTRY}' -u '${REGISTRY_USERNAME}' --password-stdin"
+          ssh $SSH_OPTS "$REMOTE" "cd '${DEPLOY_PATH}' && export BOT_IMAGE='${DEPLOY_IMAGE}' && docker compose --env-file .env pull && docker compose --env-file .env up -d --remove-orphans"
+          ssh $SSH_OPTS "$REMOTE" "docker image prune -af --filter 'until=168h'"

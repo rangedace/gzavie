@@ -2,7 +2,7 @@
   "name": "gzavie-discord-music-bot",
   "version": "0.1.0",
   "private": true,
-  "description": "Discord music bot focused on YouTube playback, Docker packaging and GitLab CI.",
+  "description": "Discord music bot focused on YouTube playback, Docker packaging and Forgejo CI.",
   "engines": {
     "node": ">=22.0.0"
   },

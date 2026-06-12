@@ -1,6 +1,6 @@
 services:
   bot:
-    image: ghcr.io/rangedace/gzavie-discord-music-bot:latest
+    image: ${BOT_IMAGE:-git.rangedace.fr/rangedace/gzavie/bot:latest}
     container_name: gzavie-bot
     network_mode: host
     restart: unless-stopped

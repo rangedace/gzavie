@@ -20,7 +20,7 @@ Bot Discord orienté musique avec commande slash `/play`, limité à YouTube pou
 - `@discordjs/voice`
 - `youtube-dl-exec`
 - Docker
-- GitHub Actions
+- Forgejo Actions
 
 ## Configuration
 
@@ -52,10 +52,10 @@ npm start
 
 ## Docker
 
-Image publiée par la CI GitHub:
+Image publiée par la CI Forgejo:
 
 ```bash
-ghcr.io/rangedace/gzavie-discord-music-bot:latest
+git.rangedace.fr/rangedace/gzavie/bot:latest
 ```
 
 Déploiement Portainer:
@@ -69,10 +69,13 @@ Le fichier `docker-compose.yml` peut servir de base à une stack Portainer.
 Déclare `DISCORD_TOKEN` et `DISCORD_CLIENT_ID` dans l’UI Portainer ou dans l’environnement de la stack.
 Le compose utilise `network_mode: host` pour éviter les soucis de session voice/UDP avec Discord dans Docker sur Linux.
 
-## GitHub CI/CD
+## Forgejo CI/CD
 
-Le workflow `.github/workflows/ci-cd.yml`:
+Le workflow `.forgejo/workflows/ci.yml`:
 
 - lance le build TypeScript
-- construit/pousse l’image Docker vers GHCR
-- déploie sur le serveur en SSH avec `docker compose pull && up -d` sur la branche par défaut
+- construit/pousse l’image Docker vers le registre Forgejo (épinglée par SHA)
+- déploie sur le serveur en SSH avec `docker compose pull && up -d` sur `main`
+
+Secrets requis: `REGISTRY_USERNAME`, `REGISTRY_PASSWORD`, `SSH_PRIVATE_KEY_B64`.
+Variables requises: `DEPLOY_PATH`, `SSH_HOST`, `SSH_PORT`.
