@@ -29,9 +29,11 @@ jobs:
           persist-credentials: false
 
       - name: Build container image
+        # GHCR rejected the push with BuildKit's default provenance attestation.
         run: |
           image="$REGISTRY/${GITHUB_REPOSITORY,,}"
           docker build \
+            --provenance=false \
             --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --tag "$image:$GITHUB_SHA" \
