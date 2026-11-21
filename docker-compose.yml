@@ -1,6 +1,6 @@
 services:
   bot:
-    image: ${BOT_IMAGE:-git.rangedace.fr/rangedace/gzavie/bot:latest}
+    image: ${BOT_IMAGE:-ghcr.io/rangedace/gzavie:latest}
     container_name: gzavie-bot
     network_mode: host
     restart: unless-stopped

@@ -20,7 +20,7 @@ Bot Discord orienté musique avec commande slash `/play`, limité à YouTube pou
 - `@discordjs/voice`
 - `youtube-dl-exec`
 - Docker
-- Forgejo Actions
+- GitHub Actions
 
 ## Configuration
 
@@ -52,10 +52,10 @@ npm start
 
 ## Docker
 
-Image publiée par la CI Forgejo:
+Image publiée sur GitHub Container Registry (GHCR) :
 
 ```bash
-git.rangedace.fr/rangedace/gzavie/bot:latest
+docker pull ghcr.io/rangedace/gzavie:latest
 ```
 
 Déploiement Portainer:
@@ -69,13 +69,11 @@ Le fichier `docker-compose.yml` peut servir de base à une stack Portainer.
 Déclare `DISCORD_TOKEN` et `DISCORD_CLIENT_ID` dans l’UI Portainer ou dans l’environnement de la stack.
 Le compose utilise `network_mode: host` pour éviter les soucis de session voice/UDP avec Discord dans Docker sur Linux.
 
-## Forgejo CI/CD
+## CI GitHub
 
-Le workflow `.forgejo/workflows/ci.yml`:
+Le workflow `.github/workflows/ci.yml` construit l’image Docker sur les pull requests et à chaque push sur `main`. Les builds de `main` sont publiés sur GHCR avec les tags `latest` et le SHA complet du commit. La publication utilise le `GITHUB_TOKEN` fourni par GitHub Actions.
 
-- lance le build TypeScript
-- construit/pousse l’image Docker vers le registre Forgejo (épinglée par SHA)
-- déploie sur le serveur en SSH avec `docker compose pull && up -d` sur `main`
+Le workflow historique `.forgejo/workflows/ci.yml` gère le déploiement SSH lorsqu’il est exécuté sur Forgejo.
 
-Secrets requis: `REGISTRY_USERNAME`, `REGISTRY_PASSWORD`, `SSH_PRIVATE_KEY_B64`.
-Variables requises: `DEPLOY_PATH`, `SSH_HOST`, `SSH_PORT`.
+Secrets Forgejo : `REGISTRY_USERNAME`, `REGISTRY_PASSWORD`, `SSH_PRIVATE_KEY_B64`, `SSH_USER`.
+Variables Forgejo : `DEPLOY_PATH`, `SSH_HOST`, `SSH_PORT`, `PRUNE_UNTIL_HOURS`.
